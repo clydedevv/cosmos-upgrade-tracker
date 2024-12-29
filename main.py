@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300  # 5 minutes
+POLL_INTERVAL_SECONDS = 900  # 15 minutes
 
 async def test_alert(update, context):
     """Test command to verify alerting functionality"""
