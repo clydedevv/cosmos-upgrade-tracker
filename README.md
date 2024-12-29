@@ -1,3 +1,5 @@
+## Credits
+This bot is powered by [Polkachu's upgrade tracking service](https://polkachu.com/chain_upgrades). Polkachu maintains an extensive network of Cosmos validators and provides reliable upgrade information across the Cosmos ecosystem. Visit [Polkachu.com](https://polkachu.com) to learn more about their services, including secure RPC endpoints and chain upgrade guides.
 
 # Cosmos Upgrade Alert Bot (@CosmosUpgradeBot)
 
