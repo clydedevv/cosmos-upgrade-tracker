@@ -1,28 +1,16 @@
 import requests
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 POLKACHU_API = "https://polkachu.com/api/v2/chain_upgrades"
 
-# Let’s include 'orai' for testing
-SG1_RELEVANT_NETWORKS = {
-    "akash",
-    "atomone",
-    "cosmos",
-    "evmos",
-    "juno",
-    "kava",
-    "lum",
-    "neutron",
-    "noble",
-    "osmosis",
-    "passage",
-    "saga",
-    "stride",
-    "orai",  # for testing
-}
-
-# We'll store upgrade info and alert flags here
+# Store upgrade info and alert flags here
 last_upgrades = {}
+
+# Cache of valid networks from Polkachu
+valid_networks = set()
 
 def fetch_upgrades():
     """
@@ -30,13 +18,24 @@ def fetch_upgrades():
     Returns a list (JSON array) of upgrades.
     """
     try:
+        logger.info("Fetching upgrades from Polkachu API")
         response = requests.get(POLKACHU_API, timeout=10)
         response.raise_for_status()
         data = response.json()
+
+        # Update valid networks cache
+        global valid_networks
+        valid_networks = {upgrade.get("network").lower() for upgrade in data if upgrade.get("network")}
+
+        logger.info(f"Found {len(data)} total upgrades")
         return data
     except Exception as e:
-        print(f"[Error] Failed to fetch Polkachu upgrades: {e}")
+        logger.error(f"Failed to fetch Polkachu upgrades: {e}")
         return []
+
+def is_valid_network(network):
+    """Check if a network name is valid"""
+    return network.lower() in valid_networks
 
 def parse_upgrades(data):
     """
@@ -45,6 +44,7 @@ def parse_upgrades(data):
     """
     upgrades = []
     for upgrade in data:
+        logger.debug(f"Parsing upgrade for network: {upgrade.get('network')}")
         upgrades.append({
             "network": upgrade.get("network"),
             "chain_name": upgrade.get("chain_name"),
@@ -55,13 +55,8 @@ def parse_upgrades(data):
     return upgrades
 
 def filter_upgrades(upgrades):
-    """
-    Return only the upgrades for the networks we care about (SG-1 + 'orai').
-    """
-    return [
-        u for u in upgrades
-        if u["network"] in SG1_RELEVANT_NETWORKS
-    ]
+    """Return all valid upgrades."""
+    return upgrades
 
 def check_for_new_or_changed_upgrades(relevant_upgrades):
     """
@@ -75,7 +70,7 @@ def check_for_new_or_changed_upgrades(relevant_upgrades):
         block = upg["block"]
 
         if net not in last_upgrades:
-            # brand new
+            logger.info(f"New upgrade found for {net}")
             upg["alerts_sent"] = {
                 "2_days_before": False,
                 "1_day_before": False,
@@ -86,9 +81,8 @@ def check_for_new_or_changed_upgrades(relevant_upgrades):
             new_or_changed.append(upg)
         else:
             old_upg = last_upgrades[net]
-            # If version or block changed, consider it changed
             if (old_upg["node_version"] != version) or (old_upg["block"] != block):
-                # preserve existing alerts_sent so we don’t lose the flags
+                logger.info(f"Changed upgrade detected for {net}")
                 alerts_sent = old_upg.get("alerts_sent", {
                     "2_days_before": False,
                     "1_day_before": False,
@@ -102,27 +96,20 @@ def check_for_new_or_changed_upgrades(relevant_upgrades):
     return new_or_changed
 
 def parse_iso_time(iso_string):
-    """
-    Helper to parse the ISO 8601 string (e.g. '2024-12-26T18:27:39.000000Z') into a datetime object.
-    """
-    # e.g. '2024-12-26T18:27:39.000000Z'
+    """Parse ISO 8601 time string into datetime object."""
     try:
-        # We can ignore the 'Z' if needed by trimming it
         iso_string = iso_string.replace('Z', '')
         dt = datetime.fromisoformat(iso_string)
         return dt
-    except ValueError:
+    except ValueError as e:
+        logger.error(f"Error parsing time {iso_string}: {e}")
         return None
 
 def hours_until_upgrade(iso_string):
-    """
-    Return how many hours from now until the upgrade time, as a float.
-    If the time is in the past or invalid, return a negative or 0.
-    """
+    """Return hours until upgrade time."""
     upgrade_dt = parse_iso_time(iso_string)
     if not upgrade_dt:
-        return -1  # invalid
+        return -1
     now = datetime.utcnow()
     delta = upgrade_dt - now
     return delta.total_seconds() / 3600.0
-
