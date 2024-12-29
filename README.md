@@ -44,9 +44,10 @@ The bot will send alerts:
 - When the upgrade time arrives
 
 ## Data Source
-
-Upgrade information is pulled from Polkachu's API and is updated every 5 minutes.
-
+- Upgrade information is pulled from Polkachu's API
+- Data is updated every 15 minutes
+- Only shows verified, upcoming upgrades
+- 
 ## Support
 
 If you have questions or issues, please open a GitHub issue or reach out to @clydedev on Telegram.
