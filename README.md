@@ -47,7 +47,7 @@ The bot will send alerts:
 - Upgrade information is pulled from Polkachu's API
 - Data is updated every 15 minutes
 - Only shows verified, upcoming upgrades
-- 
+  
 ## Support
 
 If you have questions or issues, please open a GitHub issue or reach out to @clydedev on Telegram.
