@@ -1,4 +1,3 @@
-
 import logging
 import asyncio
 from telegram.ext import CommandHandler
@@ -128,25 +127,26 @@ async def check_upgrades(application):
                 h_left = hours_until_upgrade(est_time_str)
                 alerts_sent = upg.get("alerts_sent", {})
 
-                if h_left <= 48 and not alerts_sent.get("2_days_before", False):
-                    alerts_sent["2_days_before"] = True
-                    msg = f"⚠️ [Alert] Upgrade for {net} ~2 days away ({est_time_str})!"
-                    # TODO: implement broadcast
-
                 if h_left <= 24 and not alerts_sent.get("1_day_before", False):
                     alerts_sent["1_day_before"] = True
-                    msg = f"⚠️ [Alert] Upgrade for {net} ~1 day away ({est_time_str})!"
-                    # TODO: implement broadcast
+                    msg = f"⚠️ [Alert] Upgrade for {net} is tomorrow! (~24 hours)\n" \
+                         f"Time: {est_time_str}\n" \
+                         f"Version: {upg['node_version']}"
+                    await broadcast_message(application, msg, network=net)
 
                 if h_left <= 2 and not alerts_sent.get("2_hours_before", False):
                     alerts_sent["2_hours_before"] = True
-                    msg = f"🚨 [Alert] Upgrade for {net} ~2 hours away ({est_time_str})!"
-                    # TODO: implement broadcast
+                    msg = f"🚨 [Alert] Upgrade for {net} in ~2 hours!\n" \
+                         f"Time: {est_time_str}\n" \
+                         f"Version: {upg['node_version']}"
+                    await broadcast_message(application, msg, network=net)
 
                 if h_left <= 0 and not alerts_sent.get("upgrade_time", False):
                     alerts_sent["upgrade_time"] = True
-                    msg = f"🚨 [Alert] Upgrade time has arrived for {net} ({est_time_str})!"
-                    # TODO: implement broadcast
+                    msg = f"🚨 [Alert] Upgrade time has arrived for {net}!\n" \
+                         f"Time: {est_time_str}\n" \
+                         f"Version: {upg['node_version']}"
+                    await broadcast_message(application, msg, network=net)
 
                 upg["alerts_sent"] = alerts_sent
 
