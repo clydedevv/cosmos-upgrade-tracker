@@ -39,6 +39,7 @@ A Telegram bot that sends alerts for upcoming Cosmos chain upgrades. Get notific
 ## Alert Timing
 
 The bot will send alerts:
+- 24 hours before an upgrade
 - 2 hours before an upgrade
 - When the upgrade time arrives
 
