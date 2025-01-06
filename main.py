@@ -1,7 +1,18 @@
+
 import logging
 import asyncio
 from telegram.ext import CommandHandler
-from telegram_bot import build_application, chat_subscriptions
+from telegram_bot import (
+    build_application,
+    broadcast_message,
+    subscribe_command,
+    unsubscribe_command,
+    list_command,
+    start_command,
+    load_subscriptions,
+    chat_subscriptions,
+)
+
 from polkachu_upgrades import (
     fetch_upgrades,
     parse_upgrades,
@@ -18,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 900  # 15 minutes
+POLL_INTERVAL_SECONDS = 900  # 15 minutes, Polkachu if this is to much tell me and I'll make it less
 
 async def test_alert(update, context):
     """Test command to verify alerting functionality"""
@@ -42,38 +53,38 @@ async def test_alert(update, context):
 
     await update.message.reply_text(test_msg)
 
+
 async def list_upgrades(update, context):
     """Show upcoming upgrades for subscribed networks"""
+    from telegram_bot import get_chat_subscriptions  # Add this import
+
     chat_id = update.effective_chat.id
+    logger.info("================ LIST UPGRADES DEBUG ================")
     logger.info(f"List upgrades requested by chat_id: {chat_id}")
 
-    # Get this chat's subscriptions
-    subs = chat_subscriptions.get(chat_id, set())
-    logger.info(f"Chat subscriptions: {subs}")
+    # Get subscriptions using the new function
+    subs = get_chat_subscriptions(chat_id)
+    logger.info(f"Subscriptions found for chat_id {chat_id}: {subs}")
 
     if not subs:
+        logger.warning(f"No subscriptions found for chat_id {chat_id}")
         await update.message.reply_text("You haven't subscribed to any networks yet. Use /subscribe to add networks.")
         return
 
     # Fetch current upgrades
+    logger.info("Fetching upgrades from Polkachu")
     raw_data = fetch_upgrades()
-    logger.info(f"Raw upgrades data: {raw_data}")
-
     parsed = parse_upgrades(raw_data)
-    logger.info(f"Parsed upgrades: {parsed}")
-
-    relevant = filter_upgrades(parsed)
-    logger.info(f"Relevant upgrades: {relevant}")
 
     # Filter for subscribed networks
-    subscribed_upgrades = [upg for upg in relevant if upg["network"] in subs]
-    logger.info(f"Subscribed upgrades: {subscribed_upgrades}")
+    subscribed_upgrades = [upg for upg in parsed if upg["network"].lower() in subs]
+    logger.info(f"Found {len(subscribed_upgrades)} upgrades for subscribed networks")
 
     if not subscribed_upgrades:
         await update.message.reply_text("No upcoming upgrades found for your subscribed networks.")
         return
 
-    # Build response message
+    # Build response message...
     msg = "📊 Upcoming Upgrades\n\n"
     for upg in subscribed_upgrades:
         network = upg["network"]
@@ -81,11 +92,16 @@ async def list_upgrades(update, context):
         est_time = upg["estimated_upgrade_time"]
         h_left = hours_until_upgrade(est_time)
 
-        if h_left > 0:
+        if h_left > 24:
             days_left = round(h_left / 24, 1)
-            time_str = f"~{days_left} days" if days_left >= 1 else f"~{round(h_left, 1)} hours"
+            time_str = f"~{days_left} days"
+        elif h_left > 0:
+            time_str = f"~{round(h_left, 1)} hours"
+        elif h_left > -24:
+            hours_past = abs(round(h_left, 1))
+            time_str = f"started {hours_past} hours ago"
         else:
-            time_str = "upgrade time has passed"
+            continue  # Skip old upgrades
 
         msg += (
             f"🔸 {network.upper()}\n"
@@ -96,63 +112,87 @@ async def list_upgrades(update, context):
 
     await update.message.reply_text(msg)
 
-async def check_upgrades(application):
+async def check_upgrades(context):
     """Background task to check for upgrades"""
-    while True:
-        try:
-            raw_data = fetch_upgrades()
-            parsed = parse_upgrades(raw_data)
-            relevant = filter_upgrades(parsed)
+    application = context.application
+    try:
+        logger.info("Checking for upgrades...")
+        raw_data = fetch_upgrades()
+        parsed = parse_upgrades(raw_data)
+        relevant = filter_upgrades(parsed)
 
-            changed = check_for_new_or_changed_upgrades(relevant)
-            if changed:
-                for upg in changed:
-                    network = upg["network"]
-                    version = upg["node_version"]
-                    est_time = upg["estimated_upgrade_time"]
+        # Log current state
+        logger.info(f"Found {len(relevant)} relevant upgrades")
+        for upg in relevant:
+            logger.info(f"Processing upgrade: {upg['network']} -> {upg['node_version']} at {upg['estimated_upgrade_time']}")
+
+            network = upg["network"]
+            version = upg["node_version"]
+            est_time = upg["estimated_upgrade_time"]
+
+            # Get or initialize alert flags
+            if network not in last_upgrades:
+                last_upgrades[network] = upg.copy()
+                last_upgrades[network]["alerts_sent"] = {
+                    "24_hours": False,
+                    "2_hours": False,
+                    "upgrade_time": False
+                }
+
+            alerts_sent = last_upgrades[network].get("alerts_sent", {})
+            h_left = hours_until_upgrade(est_time)
+            logger.info(f"{network}: {h_left:.1f} hours until upgrade. Alerts sent: {alerts_sent}")
+
+            try:
+                # 24 hour alert
+                if 23 <= h_left <= 24 and not alerts_sent.get("24_hours", False):
+                    logger.info(f"Sending 24-hour alert for {network}")
+                    alerts_sent["24_hours"] = True
                     msg = (
-                        f"🔔 New/Updated upgrade detected!\n"
+                        f"⚠️ [24 HOUR ALERT] Chain upgrade approaching!\n"
                         f"Network: {network}\n"
                         f"Version: {version}\n"
-                        f"Estimated Time: {est_time}\n"
+                        f"Time: {est_time}\n"
+                        f"Status: Upgrade in approximately 24 hours"
                     )
-                    # TODO: implement broadcast
+                    await broadcast_message(application, msg, network=network)
 
-            # Time-based alerts
-            for net, upg in last_upgrades.items():
-                est_time_str = upg.get("estimated_upgrade_time")
-                if not est_time_str:
-                    continue
+                # 2 hour alert
+                if 1.9 <= h_left <= 2.1 and not alerts_sent.get("2_hours", False):
+                    logger.info(f"Sending 2-hour alert for {network}")
+                    alerts_sent["2_hours"] = True
+                    msg = (
+                        f"🚨 [2 HOUR ALERT] Chain upgrade imminent!\n"
+                        f"Network: {network}\n"
+                        f"Version: {version}\n"
+                        f"Time: {est_time}\n"
+                        f"Status: Upgrade in approximately 2 hours"
+                    )
+                    await broadcast_message(application, msg, network=network)
 
-                h_left = hours_until_upgrade(est_time_str)
-                alerts_sent = upg.get("alerts_sent", {})
-
-                if h_left <= 24 and not alerts_sent.get("1_day_before", False):
-                    alerts_sent["1_day_before"] = True
-                    msg = f"⚠️ [Alert] Upgrade for {net} is tomorrow! (~24 hours)\n" \
-                         f"Time: {est_time_str}\n" \
-                         f"Version: {upg['node_version']}"
-                    await broadcast_message(application, msg, network=net)
-
-                if h_left <= 2 and not alerts_sent.get("2_hours_before", False):
-                    alerts_sent["2_hours_before"] = True
-                    msg = f"🚨 [Alert] Upgrade for {net} in ~2 hours!\n" \
-                         f"Time: {est_time_str}\n" \
-                         f"Version: {upg['node_version']}"
-                    await broadcast_message(application, msg, network=net)
-
-                if h_left <= 0 and not alerts_sent.get("upgrade_time", False):
+                # Upgrade time alert
+                if -0.1 <= h_left <= 0.1 and not alerts_sent.get("upgrade_time", False):
+                    logger.info(f"Sending upgrade-time alert for {network}")
                     alerts_sent["upgrade_time"] = True
-                    msg = f"🚨 [Alert] Upgrade time has arrived for {net}!\n" \
-                         f"Time: {est_time_str}\n" \
-                         f"Version: {upg['node_version']}"
-                    await broadcast_message(application, msg, network=net)
+                    msg = (
+                        f"🚨 [UPGRADE TIME] Chain upgrade now!\n"
+                        f"Network: {network}\n"
+                        f"Version: {version}\n"
+                        f"Time: {est_time}\n"
+                        f"Status: Upgrade time has arrived"
+                    )
+                    await broadcast_message(application, msg, network=network)
 
-                upg["alerts_sent"] = alerts_sent
+                # Update alert flags
+                last_upgrades[network]["alerts_sent"] = alerts_sent
 
-        except Exception as e:
-            logger.error(f"Error in check_upgrades: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error sending alerts for {network}: {e}", exc_info=True)
 
+    except Exception as e:
+        logger.error(f"Error in check_upgrades: {e}", exc_info=True)
+
+        logger.debug("Sleeping before next check...")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 def main():
@@ -162,11 +202,18 @@ def main():
     # Initialize application
     application = build_application()
 
-    # Add command handlers
+    # Register all command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("subscribe", subscribe_command))
+    application.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
+    application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("test", test_alert))
     application.add_handler(CommandHandler("listupgrades", list_upgrades))
 
-    # Run the bot
+    # Start upgrade checking in the background
+    application.job_queue.run_repeating(check_upgrades, interval=POLL_INTERVAL_SECONDS)
+
+    # Run the bot (this will block until stopped)
     application.run_polling()
 
 if __name__ == "__main__":
