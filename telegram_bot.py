@@ -20,21 +20,30 @@ logger = logging.getLogger(__name__)
 chat_subscriptions = {}  # e.g., { 12345678: {"orai", "cosmos"} }
 SUBSCRIPTIONS_FILE = "subscriptions.json"
 
+def get_chat_subscriptions(chat_id: int) -> set:
+    """Get subscriptions for a specific chat"""
+    global chat_subscriptions
+    # Ensure we have latest data
+    load_subscriptions()
+    return chat_subscriptions.get(chat_id, set())
+
 def load_subscriptions():
     """Load subscriptions from file"""
     global chat_subscriptions
     try:
+        logger.info("===== LOADING SUBSCRIPTIONS =====")
         if os.path.exists(SUBSCRIPTIONS_FILE):
             with open(SUBSCRIPTIONS_FILE, 'r') as f:
-                # JSON can't store integer keys, so they're stored as strings
                 data = json.load(f)
-                # Convert back to integers and sets
+                logger.info(f"Raw data from file: {data}")
                 chat_subscriptions = {
                     int(k): set(v) for k, v in data.items()
                 }
-            logger.info(f"Loaded {len(chat_subscriptions)} subscriptions from file")
+            logger.info(f"Converted subscriptions: {chat_subscriptions}")
+        else:
+            logger.warning("No subscriptions file found!")
     except Exception as e:
-        logger.error(f"Error loading subscriptions: {e}")
+        logger.error(f"Error loading subscriptions: {e}", exc_info=True)
 
 def save_subscriptions():
     """Save subscriptions to file"""
@@ -46,6 +55,7 @@ def save_subscriptions():
         with open(SUBSCRIPTIONS_FILE, 'w') as f:
             json.dump(data, f)
         logger.info("Saved subscriptions to file")
+        logger.debug(f"Saved data: {data}")
     except Exception as e:
         logger.error(f"Error saving subscriptions: {e}")
 
@@ -62,6 +72,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Subscribe to updates for specific networks"""
     chat_id = update.effective_chat.id
+    logger.info(f"Subscribe command from chat_id: {chat_id}")
+
     if not context.args:
         await update.message.reply_text("Usage: /subscribe <network1> <network2> ...")
         return
@@ -88,6 +100,8 @@ async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unsubscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Unsubscribe from updates for specific networks"""
     chat_id = update.effective_chat.id
+    logger.info(f"Unsubscribe command from chat_id: {chat_id}")
+
     if chat_id not in chat_subscriptions:
         chat_subscriptions[chat_id] = set()
 
@@ -96,7 +110,9 @@ async def unsubscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     removed_networks = []
-    for net in context.args:
+    networks = ' '.join(context.args).replace(',', ' ').split()
+
+    for net in networks:
         net_lower = net.strip().lower()
         if net_lower in chat_subscriptions[chat_id]:
             chat_subscriptions[chat_id].remove(net_lower)
@@ -111,6 +127,14 @@ async def unsubscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current subscriptions"""
     chat_id = update.effective_chat.id
+    logger.info("================ LIST COMMAND DEBUG ================")
+    logger.info(f"List command from chat_id: {chat_id}")
+    logger.info(f"chat_subscriptions object id: {id(chat_subscriptions)}")
+    logger.info(f"Full chat_subscriptions dict: {chat_subscriptions}")
+    logger.info(f"Type of chat_id: {type(chat_id)}")
+    logger.info(f"Keys in chat_subscriptions: {chat_subscriptions.keys()}")
+    logger.info(f"chat_id exists in dict: {chat_id in chat_subscriptions}")
+
     subs = chat_subscriptions.get(chat_id, set())
     if subs:
         subs_str = ", ".join(sorted(subs))
@@ -120,8 +144,10 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def build_application() -> Application:
     """Build and configure the bot application"""
+    global chat_subscriptions
     # Load existing subscriptions
     load_subscriptions()
+    logger.info(f"Loaded subscriptions at startup: {chat_subscriptions}")
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -131,23 +157,27 @@ def build_application() -> Application:
 
     application = ApplicationBuilder().token(token).build()
 
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("subscribe", subscribe_command))
-    application.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
-    application.add_handler(CommandHandler("list", list_command))
+    # Verify subscriptions loaded
+    logger.info(f"Verifying subscriptions after build: {chat_subscriptions}")
 
     return application
-
 async def broadcast_message(application: Application, message: str, network: str = None):
     """Send message to subscribed chats"""
     if network:
         network = network.lower()
 
+    logger.info(f"Broadcasting message for network: {network}")
+    logger.info(f"Message content: {message}")
+    logger.info(f"Current subscriptions: {chat_subscriptions}")
+
+    sent_count = 0
     for chat_id, networks in chat_subscriptions.items():
         if network is None or network in networks:
             try:
                 await application.bot.send_message(chat_id=chat_id, text=message)
-                logger.debug(f"Sent message to chat_id: {chat_id}")
+                logger.info(f"Successfully sent message to chat_id: {chat_id}")
+                sent_count += 1
             except Exception as e:
-                logger.error(f"Failed to send message to {chat_id}: {e}")
+                logger.error(f"Failed to send message to {chat_id}: {e}", exc_info=True)
+
+    logger.info(f"Broadcast complete. Sent to {sent_count} chats")
